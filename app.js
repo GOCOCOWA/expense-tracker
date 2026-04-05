@@ -1,253 +1,179 @@
-// ==========================================
-// 1. 環境變數配置
-// ==========================================
-// const CLIENT_ID = '你的_GOOGLE_CLIENT_ID'; 
-// const SPREADSHEET_ID = '你的_試算表_ID'; 
-
-const CLIENT_ID = ''; // 填寫後此 API 將可用
-const SPREADSHEET_ID = ''; // 填寫後此 API 將可用
-
+// --- 配置區 ---
+const CLIENT_ID = '232951328539-724gscutpak4mgcgikfk1qsikbalhssm.apps.googleusercontent.com';
+const SPREADSHEET_ID = '15u1XqLx0gaZiY2lgb9C44Gx9YZgZqFQxn3CXKNoLgUE';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
-let tokenClient;
-let gapiInited = false;
-let gisInited = false;
-let categoryChartInstance = null;
 
-// ==========================================
-// 2. 初始化 Google API
-// ==========================================
-function gapiLoaded() { gapi.load('client', initializeGapiClient); }
-async function initializeGapiClient() {
-  await gapi.client.init({ discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'] });
-  gapiInited = true;
-}
-function gisLoaded() {
-  tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: '' });
-  gisInited = true;
-}
-
-document.getElementById('auth-btn').onclick = () => {
-  tokenClient.callback = async (resp) => {
-    if (resp.error !== undefined) throw (resp);
-    
-    // UI 狀態更新
-    document.getElementById('auth-status').innerHTML = '<span style="color: var(--primary-color); font-weight: 600;">✅ 已連線 Google 帳號</span>';
-    
-    const submitBtn = document.querySelector('.submit-btn');
-    document.getElementById('category').disabled = false;
-    document.getElementById('payment').disabled = false;
-    submitBtn.innerText = '新增紀錄 (同步至雲端)';
-    submitBtn.classList.add('enabled');
-
-    await fetchFormOptions();
-    await fetchDashboardData();
-  };
-  if (gapi.client.getToken() === null) { tokenClient.requestAccessToken({prompt: 'consent'}); } 
-  else { tokenClient.requestAccessToken({prompt: ''}); }
+// 預設選項
+const DEFAULT_OPTIONS = {
+    cats: ['餐飲食品', '交通運輸', '居家生活', '休閒娛樂', '購物服飾', '醫療保健', '訂閱服務', '其他'],
+    pays: ['現金', '信用卡', '簽帳卡', '電子支付', '悠遊卡']
 };
+
+let tokenClient;
+let catChart = null;
+let trendChart = null;
+
+// --- 初始化 ---
+function gapiLoaded() { gapi.load('client', async () => { await gapi.client.init({ discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'] }); }); }
+function gisLoaded() { tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: '' }); }
 
 window.onload = () => {
-  gapiLoaded(); gisLoaded();
-  const today = new Date().toISOString().split('T')[0];
-  document.getElementById('date').value = today;
-  document.getElementById('month-filter').value = today.slice(0, 7);
-  document.getElementById('month-filter').onchange = fetchDashboardData;
+    gapiLoaded(); gisLoaded();
+    const today = new Date();
+    document.getElementById('date').value = today.toISOString().split('T')[0];
+    document.getElementById('month-filter').value = today.toISOString().slice(0, 7);
+    document.getElementById('month-filter').onchange = refreshData;
+    
+    // 初始化下拉選單
+    populateSelect('category', DEFAULT_OPTIONS.cats);
+    populateSelect('payment', DEFAULT_OPTIONS.pays);
 };
 
-// ==========================================
-// 3. 讀取選項
-// ==========================================
-async function fetchFormOptions() {
-  try {
-    const response = await gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID, range: '欄位表!A2:C',
-    });
-    const rows = response.result.values;
-    if (!rows) return;
+// --- Google 認證與讀取 ---
+document.getElementById('auth-btn').onclick = () => {
+    tokenClient.callback = async (resp) => {
+        if (resp.error) return;
+        document.getElementById('auth-section').innerHTML = '<span class="badge">已連線試算表</span>';
+        document.getElementById('submit-btn').classList.add('active');
+        document.getElementById('category').disabled = false;
+        document.getElementById('payment').disabled = false;
+        await refreshData();
+    };
+    tokenClient.requestAccessToken({ prompt: gapi.client.getToken() ? '' : 'consent' });
+};
 
-    const categories = new Set();
-    const payments = new Set();
-    rows.forEach(row => {
-      if (row[1]) categories.add(row[1]);
-      if (row[2]) payments.add(row[2]);
-    });
+async function refreshData() {
+    if (!gapi.client.getToken()) return;
+    try {
+        const res = await gapi.client.sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: '記帳紀錄!A2:G' });
+        const rows = res.result.values || [];
+        const filterMonth = document.getElementById('month-filter').value;
+        
+        let inc = 0, exp = 0;
+        const catMap = {};   // 類別比例用
+        const dailyMap = {}; // 每日趨勢用
+        const list = [];
 
-    populateSelect('category', categories);
-    populateSelect('payment', payments);
-  } catch (err) { console.error('讀取欄位表失敗:', err); }
-}
-
-function populateSelect(id, setValues) {
-  const select = document.getElementById(id);
-  select.innerHTML = '<option value="" disabled selected>請選擇</option>'; // Reset
-  setValues.forEach(val => {
-    const option = document.createElement('option');
-    option.value = val; option.textContent = val;
-    select.appendChild(option);
-  });
-}
-
-// ==========================================
-// 4. 新增資料
-// ==========================================
-document.getElementById('expense-form').onsubmit = async (e) => {
-  e.preventDefault();
-  
-  const id = Date.now().toString();
-  const date = document.getElementById('date').value;
-  const type = document.getElementById('type').value;
-  const category = document.getElementById('category').value;
-  const amount = document.getElementById('amount').value;
-  const desc = document.getElementById('description').value;
-  const payment = document.getElementById('payment').value;
-
-  const values = [[id, date, type, category, amount, desc, payment]];
-
-  if (gapi.client.getToken() === null) {
-      alert('未連線！這只是前端展示，請點擊右上角連接 Google 帳號。');
-  } else {
-      try {
-        await gapi.client.sheets.spreadsheets.values.append({
-          spreadsheetId: SPREADSHEET_ID, range: '記帳紀錄!A:G',
-          valueInputOption: 'USER_ENTERED', resource: { values: values },
+        rows.forEach(r => {
+            const [id, date, type, cat, amt, desc] = r;
+            if (date && date.startsWith(filterMonth)) {
+                const val = parseFloat(amt) || 0;
+                if (type === '收入') inc += val;
+                else {
+                    exp += val;
+                    catMap[cat] = (catMap[cat] || 0) + val;
+                    // 記錄每日支出
+                    const day = date.split('-')[2]; // 取得 "DD"
+                    dailyMap[day] = (dailyMap[day] || 0) + val;
+                }
+                list.push({ date, cat, desc, val, type });
+            }
         });
-        alert('紀錄新增成功！');
-        document.getElementById('expense-form').reset();
-        document.getElementById('date').value = new Date().toISOString().split('T')[0];
+
+        document.getElementById('total-income').innerText = `NT$ ${inc.toLocaleString()}`;
+        document.getElementById('total-expense').innerText = `NT$ ${exp.toLocaleString()}`;
+        document.getElementById('total-balance').innerText = `NT$ ${(inc - exp).toLocaleString()}`;
         
-        // 若新增的日期屬於目前篩選的月份，則重新整理畫面
-        const selectedMonth = document.getElementById('month-filter').value;
-        if(date.startsWith(selectedMonth)) {
-            await fetchDashboardData(); 
-        }
-      } catch (err) {
-        console.error('寫入失敗:', err);
-        alert('寫入失敗，請檢查權限或試算表設定。');
-      }
-  }
-};
-
-// ==========================================
-// 5. 抓取紀錄、產生圖表與【明細列表】
-// ==========================================
-async function fetchDashboardData() {
-  if (gapi.client.getToken() === null) return;
-
-  try {
-    const response = await gapi.client.sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID, range: '記帳紀錄!A2:G',
-    });
-    const rows = response.result.values || [];
-
-    const selectedMonth = document.getElementById('month-filter').value;
-    let income = 0; let expense = 0;
-    const expenseCategories = {};
-    const monthTransactions = []; // 儲存該月的明細
-
-    rows.forEach(row => {
-      const recordDate = row[1];
-      const type = row[2];
-      const cat = row[3];
-      const amount = parseFloat(row[4]) || 0;
-      const desc = row[5] || '-';
-      const payment = row[6] || '-';
-
-      if (recordDate && recordDate.startsWith(selectedMonth)) {
-        // 記錄明細
-        monthTransactions.push({ date: recordDate, type, category: cat, desc, payment, amount });
-
-        // 計算總覽與分類
-        if (type === '收入') {
-          income += amount;
-        } else if (type === '支出') {
-          expense += amount;
-          expenseCategories[cat] = (expenseCategories[cat] || 0) + amount;
-        }
-      }
-    });
-
-    // 更新數字總覽
-    document.getElementById('total-income').innerText = `NT$ ${income.toLocaleString()}`;
-    document.getElementById('total-expense').innerText = `NT$ ${expense.toLocaleString()}`;
-    document.getElementById('total-balance').innerText = `NT$ ${(income - expense).toLocaleString()}`;
-
-    // 更新畫面
-    renderChart(expenseCategories);
-    renderTable(monthTransactions);
-
-  } catch (err) { console.error('讀取紀錄失敗:', err); }
+        renderTable(list);
+        renderCategoryChart(catMap);
+        renderTrendChart(dailyMap);
+    } catch (e) { console.error(e); }
 }
 
-// 渲染明細表格
-function renderTable(transactions) {
+// --- 圖表渲染區 ---
+
+// 1. 類別比例 (圓餅圖)
+function renderCategoryChart(data) {
+    const ctx = document.getElementById('categoryChart').getContext('2d');
+    if (catChart) catChart.destroy();
+    catChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: Object.keys(data),
+            datasets: [{ data: Object.values(data), backgroundColor: ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#e2e8f0'], borderWidth: 0 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }, cutout: '70%' }
+    });
+}
+
+// 2. 每日趨勢 (條狀圖) - 新增
+function renderTrendChart(data) {
+    const ctx = document.getElementById('trendChart').getContext('2d');
+    if (trendChart) trendChart.destroy();
+
+    // 準備 1~31 天的標籤
+    const labels = Array.from({ length: 31 }, (_, i) => (i + 1).toString().padStart(2, '0'));
+    const values = labels.map(day => data[day] || 0);
+
+    trendChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '每日支出',
+                data: values,
+                backgroundColor: '#818cf8',
+                borderRadius: 4,
+                hoverBackgroundColor: '#6366f1'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, grid: { display: false }, ticks: { font: { size: 10 } } },
+                x: { grid: { display: false }, ticks: { font: { size: 9 } } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+}
+
+function renderTable(data) {
     const tbody = document.getElementById('transaction-list');
-    tbody.innerHTML = ''; // 清空現有資料
-
-    if (transactions.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">該月份尚無任何交易紀錄</td></tr>`;
-        return;
-    }
-
-    // 依據日期由新到舊排序
-    transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    transactions.forEach(tx => {
+    tbody.innerHTML = '';
+    data.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(tx => {
         const tr = document.createElement('tr');
-        
-        // 判斷金額的顏色 class (收入顯示綠色)
-        const amountClass = tx.type === '收入' ? 'type-income' : 'type-expense';
-        const sign = tx.type === '收入' ? '+' : '';
-
         tr.innerHTML = `
-            <td>${tx.date}</td>
-            <td><span class="badge">${tx.category}</span></td>
-            <td>${tx.desc}</td>
-            <td>${tx.payment}</td>
-            <td class="amount-cell ${amountClass}">${sign} NT$ ${tx.amount.toLocaleString()}</td>
+            <td>${tx.date.slice(5)}</td>
+            <td><span class="badge">${tx.cat}</span></td>
+            <td>${tx.desc || '-'}</td>
+            <td class="text-right ${tx.type === '收入' ? 'success' : ''}" style="font-weight:600; color:${tx.type === '收入' ? '#10b981' : 'inherit'}">
+                ${tx.type === '收入' ? '+' : ''}${tx.val.toLocaleString()}
+            </td>
         `;
         tbody.appendChild(tr);
     });
 }
 
-// 繪製支出圓餅圖
-function renderChart(dataObj) {
-  const ctx = document.getElementById('categoryChart').getContext('2d');
-  if (categoryChartInstance) { categoryChartInstance.destroy(); }
-
-  // 專業柔和色系 Palette
-  const proColors = ['#64748B', '#94A3B8', '#CBD5E1', '#E2E8F0', '#F1F5F9'];
-  const labels = Object.keys(dataObj);
-  const dataValues = Object.values(dataObj);
-
-  if (labels.length === 0) {
-      // 無資料時的空圖表
-      categoryChartInstance = new Chart(ctx, {
-          type: 'doughnut',
-          data: { labels: ['無資料'], datasets: [{ data: [1], backgroundColor: ['#F1F5F9'] }] },
-          options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip: { enabled: false } } }
-      });
-      return;
-  }
-
-  categoryChartInstance = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: labels,
-      datasets: [{
-        data: dataValues,
-        backgroundColor: proColors.slice(0, labels.length),
-        borderWidth: 1,
-        borderColor: '#ffffff'
-      }]
-    },
-    options: { 
-        responsive: true, 
-        maintainAspectRatio: false,
-        cutout: '65%', // 讓中間的洞大一點，更具現代感
-        plugins: {
-            legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: { size: 12 } } },
-            tooltip: { callbacks: { label: (context) => ` ${context.label}: NT$ ${context.parsed.toLocaleString()}` } }
-        }
-    }
-  });
+function populateSelect(id, list) {
+    const el = document.getElementById(id);
+    el.innerHTML = '';
+    list.forEach(i => { const o = document.createElement('option'); o.value = i; o.innerText = i; el.appendChild(o); });
 }
+
+// 提交表單
+document.getElementById('expense-form').onsubmit = async (e) => {
+    e.preventDefault();
+    if (!gapi.client.getToken()) return alert('請先連線');
+
+    const payload = [
+        Date.now().toString(),
+        document.getElementById('date').value,
+        document.getElementById('type').value,
+        document.getElementById('category').value,
+        document.getElementById('amount').value,
+        document.getElementById('description').value,
+        document.getElementById('payment').value
+    ];
+
+    try {
+        await gapi.client.sheets.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID, range: '記帳紀錄!A:G',
+            valueInputOption: 'USER_ENTERED', resource: { values: [payload] }
+        });
+        alert('儲存成功！');
+        document.getElementById('expense-form').reset();
+        await refreshData();
+    } catch (err) { alert('儲存失敗'); }
+};
