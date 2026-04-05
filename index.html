@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>專業雲端記帳系統</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+    <header class="top-bar">
+        <div class="brand">
+            <span class="logo">📊</span>
+            <h1>雲端財會儀表板</h1>
+        </div>
+        <div id="auth-status">
+            <button id="auth-btn" class="btn primary">連接 Google Workspace</button>
+        </div>
+    </header>
+
+    <main class="container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>新增交易紀錄</h2>
+            </div>
+            <form id="expense-form">
+                <div class="form-group">
+                    <label>日期</label>
+                    <input type="date" id="date" required>
+                </div>
+                <div class="form-group">
+                    <label>類型</label>
+                    <select id="type" required>
+                        <option value="" disabled selected>請選擇類型</option>
+                        <option value="收入">收入</option>
+                        <option value="支出">支出</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>分類</label>
+                    <select id="category" required disabled>
+                        <option value="" disabled selected>連線後載入...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>金額</label>
+                    <input type="number" id="amount" min="0" placeholder="NT$ 0" required>
+                </div>
+                <div class="form-group">
+                    <label>付款方式</label>
+                    <select id="payment" required disabled>
+                        <option value="" disabled selected>連線後載入...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>備註說明</label>
+                    <input type="text" id="description" placeholder="輸入交易細節...">
+                </div>
+                <button type="submit" class="btn submit-btn">儲存草稿 (未連線)</button>
+            </form>
+        </aside>
+
+        <section class="dashboard">
+            <div class="toolbar">
+                <div class="filter-group">
+                    <label for="month-filter">分析月份</label>
+                    <input type="month" id="month-filter">
+                </div>
+            </div>
+
+            <div class="summary-cards">
+                <div class="card income-card">
+                    <div class="card-title">本月總收入</div>
+                    <div class="card-value" id="total-income">NT$ 0</div>
+                </div>
+                <div class="card expense-card">
+                    <div class="card-title">本月總支出</div>
+                    <div class="card-value" id="total-expense">NT$ 0</div>
+                </div>
+                <div class="card balance-card">
+                    <div class="card-title">本月結餘</div>
+                    <div class="card-value" id="total-balance">NT$ 0</div>
+                </div>
+            </div>
+            
+            <div class="dashboard-grid">
+                <div class="chart-section card">
+                    <h3>支出結構分析</h3>
+                    <div class="canvas-wrapper">
+                        <canvas id="categoryChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="details-section card">
+                    <h3>交易明細</h3>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>分類</th>
+                                    <th>說明</th>
+                                    <th>付款方式</th>
+                                    <th class="text-right">金額</th>
+                                </tr>
+                            </thead>
+                            <tbody id="transaction-list">
+                                <tr>
+                                    <td colspan="5" class="empty-state">請連線或選擇月份以載入資料</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://accounts.google.com/gsi/client"></script>
+    <script src="app.js"></script>
+</body>
+</html>
